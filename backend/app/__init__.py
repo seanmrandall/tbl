@@ -25,4 +25,20 @@ def create_app():
         """Health check endpoint for Railway"""
         return jsonify({'status': 'healthy', 'message': 'Privacy-Preserving Query API is running'})
     
+    # Root endpoint
+    @app.route('/')
+    def root():
+        """Root endpoint"""
+        return jsonify({
+            'message': 'Privacy-Preserving Query API',
+            'version': '1.0',
+            'endpoints': {
+                'health': '/api/health',
+                'docs': '/swagger',
+                'upload': '/api/upload/',
+                'schema': '/api/schema/',
+                'query': '/api/query/'
+            }
+        })
+    
     return app 
