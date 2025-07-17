@@ -152,12 +152,6 @@ class QueryResource(Resource):
             logging.error(f"Query error: {str(e)}")
             api.abort(500, 'Internal server error')
 
-# Health check endpoint
-@api_bp.route('/health')
-def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'Privacy-Preserving Query API is running'}) 
-
 @api_bp.route('/load-demo/', methods=['POST'])
 def load_demo_dataset():
     """Load the synthetic injuries demo dataset for demonstration purposes."""
