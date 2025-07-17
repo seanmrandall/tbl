@@ -1,0 +1,196 @@
+1. Overview (MVP scope)
+A web-based, Stata-style interface for safe frequency tables on a single structured dataset.
+The dataset is uploaded once (CSV ≤ 1 GB) and held in memory for fast queries.
+Counts <5 are suppressed (plus complementary suppression) to prevent disclosure.
+No user authentication, no audit logs, two-to-three simultaneous analysts max.
+
+2. High-level architecture
+pgsql
+Copy
+Edit
+┌──────────────────────────────────────────── Browser ─────────────────────────────────────────────┐
+│  • Monaco editor (REPL) • Variable sidebar • Results pane (HTML table)                           │
+└───────────────────────────────────────────────────────────────────────────────────────────────────┘
+        ▲  HTTPS (JSON)                                                               
+        ▼
+┌─────────────────────────── Flask + Gunicorn container ────────────────────────────┐
+│ • load_dataframe()  – S3  → pickle cache (/tmp/dataset.pkl)                       │
+│ • query_api()       – parse Stata-style command                                   │
+│ • suppression_engine() – counts <5 NULL + complementary rule                      │
+└────────────────────────────────────────────────────────────────────────────────────┘
+        ▲                                     ▲
+        │                                     │
+ S3 (CSV + pickle)                   Default EB/NGINX logs  (no custom logs)
+Instance type: t3.large (2 vCPU / 8 GB RAM).
+
+3. Tech-stack specification
+Layer	Choice (MVP)	Notes
+Front-end	React 18 + TypeScript, Vite	Chakra UI layout; Monaco Editor for REPL
+Back-end	Flask 3.0 + Flask-RESTX	Single Gunicorn worker (-w 1)
+Data engine	Pandas 2.2	DataFrame cached in RAM; pickle cold-start cache
+Parser	lark PEG grammar	Handles tab var1 [var2] if <filter>
+Suppression	Custom Python module	<5 rule + complementary suppression
+Container	Docker (python:3.12-slim)	See Dockerfile below
+CI/CD	GitHub Actions → ECR → Elastic Beanstalk (Docker platform)	
+
+4. API contract
+POST /upload
+form-data: file=dataset.csv
+limits: max size 1 GB; header row required
+response: 201 { dataset_key }
+
+GET /schema?dataset_key=…
+json
+Copy
+Edit
+{
+  "columns": [
+    {"name": "age", "type": "int"},
+    {"name": "sex", "type": "category"},
+    ...
+  ],
+  "row_count": 7345123
+}
+POST /query
+json
+Copy
+Edit
+{
+  "dataset_key": "abc123",
+  "command": "tab sex indigenousStatus if age > 50 & region == \"Rural\""
+}
+Returns:
+
+json
+Copy
+Edit
+{
+  "columns": ["sex", "indigenousStatus", "freq"],
+  "data": [["F", "Yes", 123],
+           ["F", "No", "<5>"],
+           ["M", "Yes", 87],
+           ["M", "No", 452]]
+}
+HTTP 400 for syntax errors or filter ops outside the allowed set.
+
+5. Suppression rules
+Primary: any cell with count < 5 → string "<5" (or null if preferred).
+
+Complementary: if exactly one cell in a row or column is suppressed, also suppress the second-smallest cell in that row/column.
+
+Totals: row/column totals recomputed after suppression; grand total always displayed.
+
+Edge cases: if all cells in a row/column are suppressed, keep them all suppressed.
+
+6. Dockerfile (root of repo)
+dockerfile
+Copy
+Edit
+FROM python:3.12-slim
+
+# System deps
+RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+
+# Workdir
+WORKDIR /app
+
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Source
+COPY . .
+
+# Flask env
+ENV FLASK_APP=app.py
+ENV PYTHONUNBUFFERED=1
+
+# Expose port
+EXPOSE 5000
+
+# Start app
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "app:app"]
+requirements.txt (minimum):
+
+ini
+Copy
+Edit
+flask==3.0.*
+flask-restx==1.3.*
+pandas==2.2.*
+boto3==1.34.*
+lark==1.1.*
+monotonic==1.6
+7. Deployment steps (Elastic Beanstalk – Docker platform)
+Build & push image
+
+bash
+Copy
+Edit
+docker build -t pp-query:latest .
+aws ecr create-repository --repository-name pp-query (first time only)
+docker tag pp-query:latest <acct>.dkr.ecr.ap-southeast-2.amazonaws.com/pp-query:latest
+aws ecr get-login-password | docker login --username AWS --password-stdin <acct>.dkr.ecr.ap-southeast-2.amazonaws.com
+docker push <acct>.dkr.ecr.ap-southeast-2.amazonaws.com/pp-query:latest
+Dockerrun.aws.json
+
+json
+Copy
+Edit
+{
+  "AWSEBDockerrunVersion": 2,
+  "containerDefinitions": [
+    {
+      "name": "pp-query-app",
+      "image": "<acct>.dkr.ecr.ap-southeast-2.amazonaws.com/pp-query:latest",
+      "memory": 7168,
+      "essential": true,
+      "portMappings": [
+        { "hostPort": 5000, "containerPort": 5000 }
+      ]
+    }
+  ]
+}
+eb create pp-query-env --platform docker --instance-types t3.large
+
+Set env vars: AWS_DEFAULT_REGION, S3_BUCKET.
+
+8. Feature checklist & “Definition of Done”
+Area	Requirement	Done when…
+Upload	Reject > 1 GB CSV or missing header	API returns HTTP 413
+Schema endpoint	Lists columns + dtypes + row count	Sidebar populates in UI
+Parser	Accepts ==, !=, <, >, <=, >=, &, `	`
+Query engine	1- or 2-way cross-tabs	P95 latency < 3 s on 7 M rows
+Suppression	Implements rules 1-3 above	Edge-case tests (single small cell) pass
+UI	Monaco REPL + variable list + results table	Chrome/Edge/Firefox latest
+Docker	docker run works locally; image deploys to EB	README steps < 10 min
+Cold-start	Container boots & /schema returns in < 20 s	Tested after fresh deploy
+
+9. Three-month sprint roadmap (2-week cadence)
+Sprint	Goals
+0 – Week 1	Repo scaffold, Dockerfile, GitHub Actions CI, “hello-world” deploy
+1 – Weeks 2-3	/upload to S3 + pickle cache, /schema
+2 – Weeks 4-5	Lark parser + DataFrame query engine
+3 – Weeks 6-7	Suppression logic + full unit coverage
+4 – Weeks 8-9	React front-end (Monaco, sidebar, results)
+5 – Weeks 10-11	Polish, error handling, CSV size guard
+6 – Week 12	UAT on 1 GB dataset, performance tune, hand-over docs
+
+10. Risk register
+Risk	Likelihood	Impact	Mitigation
+OOM crash on larger dataset	M	H	Enforce 1 GB / 7 M rows; CloudWatch alarm on MemoryUtilization > 80%
+GIL blocks under concurrency	M	M	Single worker is fine for 2-3 users; future: Polars, multi-process
+Cold-start > 20 s	L	M	Pickle cache; keep min 1 instance warm
+Disclosure via differencing	L	H	Complementary suppression; future DP module
+
+11. Handover artefacts
+README-dev.md – local run in 5 commands.
+
+Complete source with Dockerfile, Dockerrun.aws.json, requirements.txt.
+
+OpenAPI spec auto-generated by Flask-RESTX (/swagger).
+
+Sample synthetic CSV (100 k rows) + pytest fixtures.
+
+CI pipeline badge (build, test, lint).
+
