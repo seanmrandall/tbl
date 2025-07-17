@@ -9,18 +9,11 @@ def create_app():
     # Enable CORS
     CORS(app)
     
-    # Configure API
-    api = Api(app, 
-              title='Privacy-Preserving Query API',
-              description='A Stata-style interface for safe frequency tables',
-              version='1.0',
-              doc='/swagger')
-    
-    # Register blueprints
+    # Register blueprints first
     app.register_blueprint(api_bp, url_prefix='/api')
     
-    # Health check endpoint (accessible at /api/health)
-    @app.route('/api/health')
+    # Health check endpoint (accessible at /health - simpler path)
+    @app.route('/health')
     def health_check():
         """Health check endpoint for Railway"""
         return jsonify({'status': 'healthy', 'message': 'Privacy-Preserving Query API is running'})
@@ -33,7 +26,7 @@ def create_app():
             'message': 'Privacy-Preserving Query API',
             'version': '1.0',
             'endpoints': {
-                'health': '/api/health',
+                'health': '/health',
                 'docs': '/swagger',
                 'upload': '/api/upload/',
                 'schema': '/api/schema/',
