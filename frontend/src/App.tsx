@@ -20,7 +20,7 @@ import {
 } from '@chakra-ui/react';
 import { FiPlay, FiUpload, FiDatabase } from 'react-icons/fi';
 import { uploadDataset, getSchema, executeQuery } from './services/api';
-import { UploadResponse, SchemaResponse, QueryResponse, Column } from './types/api';
+import { SchemaResponse, QueryResponse } from './types/api';
 import VariableSidebar from './components/VariableSidebar';
 import ResultsTable from './components/ResultsTable';
 import axios from 'axios';

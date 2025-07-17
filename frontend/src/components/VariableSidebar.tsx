@@ -5,7 +5,6 @@ import {
   HStack,
   Text,
   Badge,
-  Divider,
   Heading,
 } from '@chakra-ui/react';
 import { Column } from '../types/api';
